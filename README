@@ -1,0 +1,5 @@
+1. 生成requirement.txt依赖包文件
+pipreqs . --encoding=utf8 --force
+
+2. 生成可执行文件
+pyinstaller --onefile --windowed --icon=your_icon.ico your_script.py

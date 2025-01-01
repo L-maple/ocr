@@ -1,0 +1,8 @@
+aliyun_python_sdk_core==2.16.0
+Flask==2.0.3
+pdf2image==1.17.0
+Werkzeug==2.0.3
+
+pandas~=1.1.5
+openpyxl~=3.1.3
+Pillow~=8.4.0
