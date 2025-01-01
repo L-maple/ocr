@@ -1,8 +1,8 @@
 import os
 import json
-import shutil
 import openpyxl
 import tkinter as tk
+import shutil
 
 from tkinter import messagebox
 from tkinter import filedialog
@@ -78,7 +78,7 @@ class OCR:
     def get_client(self):
         return self.client
 
-    def recognize(self, image_path, file_path, sheet_name):
+    def recognize(self, image_path, file_path, sheet_name) -> int:
         body_stream = StreamClient.read_from_file_path(image_path)
         recognize_request = ocr_api_20210707_models.RecognizeTaxClearanceCertificateRequest(body=body_stream)
         runtime = util_models.RuntimeOptions()
@@ -86,15 +86,18 @@ class OCR:
             resp = self.client.recognize_tax_clearance_certificate_with_options(recognize_request, runtime)
             response_dic = json.loads(resp.body.data)
             invoice_to_excel(response_dic, file_path, sheet_name)
-        except Exception as error:
-            print(error)
-            messagebox.showinfo("访问OCR失败", message=f"error: {error}")
-            exit()
+        except Exception as e:
+            directory = os.path.dirname(file_path)
+            target_path = os.path.join(directory, os.path.basename(image_path))
+            shutil.copy(image_path, target_path)
+            return -1
+        return 1
 
 
 class Application(tk.Frame):
     def __init__(self, master=None, test=False):
         super().__init__(master)
+        self.secret_file_path = None
         self.access_secret = None
         self.access_key = None
         self.test = test
@@ -105,9 +108,9 @@ class Application(tk.Frame):
         self.master = master
         self.pack()
         self.file_path = None
-        self.secret_file_path = "~/.access_key.json"
         self.create_buttons()
         self.doing = False
+        self.failed = 0
 
     def create_buttons(self):
         canvas = tk.Canvas(self.master, width=800, height=600)
@@ -125,12 +128,16 @@ class Application(tk.Frame):
         self.access_secret_entry = tk.Entry(self.master, width=30)
         canvas.create_window(500, 75, window=self.access_secret_entry)
 
-        access_key_path = os.path.expanduser(self.secret_file_path)
+        home_dir = os.path.expanduser("~")
+        access_key_path = os.path.join(home_dir, '.secret.json')
+        self.secret_file_path = access_key_path
         if os.path.exists(access_key_path):
             with open(access_key_path, 'r') as file:
                 data = json.load(file)
-                self.access_key.insert(0, data.get("accessKey", None))
-                self.access_secret.insert(0, data.get("accessSecret", None))
+                self.access_key = data.get("accessKey", None)
+                self.access_secret = data.get("accessSecret", None)
+                self.access_key_entry.insert(0, self.access_key)
+                self.access_secret_entry.insert(0, self.access_secret)
 
         self.upload_button = tk.Button(self.master, text="请上传完税证明PDF文件", command=self.upload_file, font=("Helvetica", 14),
                             width=30, height=3)
@@ -169,32 +176,35 @@ class Application(tk.Frame):
             return
 
         self.doing = True
-        if self.test:
-            self.file_path = "19年完税证明.pdf"
-            with open("output.json", 'r') as file:
-                invoice_dict = json.load(file)
-                file_name = os.path.basename(self.file_path)
-                sheet_name, _ = os.path.splitext(file_name)
-                invoice_to_excel(invoice_dict, self.file_path, sheet_name)
-        else:
-            self.access_key = self.access_key_entry.get().strip()
-            self.access_secret = self.access_key_entry.get().strip()
-            if self.file_path is None:
-                messagebox.showwarning("没有选择文件", message="请先上传一个完税证明PDF文件")
-                self.doing = False
-                return
-            if self.access_key is None or len(self.access_key) == 0:
-                messagebox.showwarning("accessKey为空", message="请先输入完整的access key")
-                self.doing = False
-                return
-            if self.access_secret is None or len(self.access_secret) == 0:
-                messagebox.showwarning("accessSecret为空", message="请先输入完整的access secret")
-                self.doing = False
-                return
+        # if self.test:
+        #     self.file_path = "19年完税证明.pdf"
+        #     with open("output.json", 'r') as file:
+        #         invoice_dict = json.load(file)
+        #         file_name = os.path.basename(self.file_path)
+        #         sheet_name, _ = os.path.splitext(file_name)
+        #         invoice_to_excel(invoice_dict, self.file_path, sheet_name)
 
-            self.parse_pdf()
-            new_file_path = self.file_path[:-len("pdf")] + "xlsx"
+        self.access_key = self.access_key_entry.get().strip()
+        self.access_secret = self.access_secret_entry.get().strip()
+        if self.file_path is None:
+            messagebox.showwarning("没有选择文件", message="请先上传一个完税证明PDF文件")
+            self.doing = False
+            return
+        if self.access_key is None or len(self.access_key) == 0:
+            messagebox.showwarning("accessKey为空", message="请先输入完整的access key")
+            self.doing = False
+            return
+        if self.access_secret is None or len(self.access_secret) == 0:
+            messagebox.showwarning("accessSecret为空", message="请先输入完整的access secret")
+            self.doing = False
+            return
+
+        self.parse_pdf()
+        new_file_path = self.file_path[:-len("pdf")] + "xlsx"
+        if self.failed == 0:
             messagebox.showinfo("success", message=f"PDF转Excel成功，文件路径为: {new_file_path}")
+        else:
+            messagebox.showwarning("failed", message=f"部分成功，有{self.failed}张图片转Excel行数据失败，图片保存在文件目录下")
 
         self.doing = False
         self.upload_button.config(text="请上传完税证明PDF文件")
@@ -203,16 +213,34 @@ class Application(tk.Frame):
         converted_images_folder = 'converted_images/'
         os.makedirs(converted_images_folder, exist_ok=True)
 
+        if self.test:
+            image_path = os.path.join(converted_images_folder, "invoice.jpg")
+            file_name = os.path.basename(self.file_path)
+            sheet_name, _ = os.path.splitext(file_name)
+            ocr_manager = OCR(self.access_key, self.access_secret)
+            ocr_manager.recognize(image_path, self.file_path, sheet_name)
+            return
+
         if self.file_path.endswith('.pdf'):
             file_name = os.path.basename(self.file_path)
             sheet_name, _ = os.path.splitext(file_name)
             images = convert_from_path(self.file_path, fmt='jpeg')
             for i, image in enumerate(images):
-                image_path = os.path.join(converted_images_folder, f'invoice.jpg')
+                image_path = os.path.join(converted_images_folder, f'invoice-{i}-{sheet_name}.jpg')
                 image.save(image_path, 'JPEG')
 
                 ocr_manager = OCR(self.access_key, self.access_secret)
-                ocr_manager.recognize(image_path, self.file_path, sheet_name)
+                if ocr_manager.recognize(image_path, self.file_path, sheet_name) < 0:
+                    self.failed += 1
+
+                os.remove(image_path)
+
+        with open(self.secret_file_path, 'w') as file:
+            data = {
+                "accessKey": self.access_key,
+                "accessSecret": self.access_secret
+            }
+            json.dump(data, file, ensure_ascii=False, indent=4)
 
         shutil.rmtree(converted_images_folder)
 
